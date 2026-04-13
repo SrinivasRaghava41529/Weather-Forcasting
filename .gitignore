@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+.venv/
+
+# Data — never commit raw or processed data
+data/raw/
+data/processed/
+data/features/
+
+# Model artifacts — use artifact storage (S3/MLflow) in production
+artifacts/
+*.pkl
+
+# Jupyter noise
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
