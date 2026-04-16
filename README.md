@@ -84,48 +84,11 @@ The model does not rely only on current inputs. It automatically derives:
 
 ## 🖥️ UI Preview
 
-(Add your screenshot here)
+<img width="939" height="378" alt="image" src="https://github.com/user-attachments/assets/175381dd-769a-49ca-b92b-7f8a61712c61" />
+
+<img width="463" height="176" alt="image" src="https://github.com/user-attachments/assets/c63c35a9-37d1-40ea-87b7-36f4be224062" />
+
+<img width="402" height="340" alt="image" src="https://github.com/user-attachments/assets/b84a9f62-8d1a-48f6-adee-e537ceab7864" />
+
 
 ---
-
-## ⚙️ Tech Stack
-
-* Python
-* Scikit-learn / XGBoost / LightGBM (your model)
-* Pandas, NumPy
-* Streamlit
-* SHAP / LIME (optional)
-
----
-
-## ▶️ How to Run
-
-```bash
-git clone <repo-url>
-cd project
-pip install -r requirements.txt
-streamlit run app.py
-```
-
----
-
-## 📌 Key Learnings
-
-* Importance of **feature engineering in time-series ML**
-* Handling **training vs inference consistency**
-* Designing **ML pipelines for real-world deployment**
-* Communicating model uncertainty
-
----
-
-## 🔮 Future Improvements
-
-* Add SHAP-based explainability dashboard
-* Integrate real-time weather API
-* Deploy as REST API (FastAPI)
-
----
-
-## 👤 Author
-
-Your Name
