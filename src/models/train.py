@@ -1,52 +1,3 @@
-"""
-src/models/train.py — Training, evaluation, and model persistence.
-
-LEAKAGE FIXES APPLIED (do not revert):
-  Fix 1 — naive_baseline() now uses persistence model (T+1 = T), not flat
-           last-training-value. Old version gave MAE=5°C which was meaningless.
-
-  Fix 2 — _prepare_X_y() default changed from target_col="temp_c" to
-           target_col="temp_c_next_1h". The old default caused the model to:
-             • exclude "temp_c" (current temp) from features
-             • leave "temp_c_next_1h" (the answer) in features as a predictor
-             • predict the current hour using the next hour's temperature
-           This made R²=1.000 trivially — the model was reading the answer.
-
-  Fix 3 — compare_models() and train_final_model() updated to match
-           target_col="temp_c_next_1h" throughout. No function passes
-           "temp_c" as target anywhere.
-
-WHAT THE MODEL NOW DOES (correctly):
-  Features at row T = everything you KNOW at time T:
-    - temp_c (current temperature)
-    - lag features: temp 1h, 2h, 3h, 6h, 12h, 24h, 48h ago
-    - rolling mean and std over 3h, 6h, 12h, 24h windows
-    - cyclical time: hour, month, day-of-year as sin/cos pairs
-    - independent atmospheric: pressure, humidity, dew_point, wind
-    - causal signal: pressure_tendency (1h pressure change)
-
-  Target at row T = temp_c_next_1h = temperature 1 hour in the future
-                    (created by shift(-1) in create_forecast_target())
-
-EXPECTED METRICS AFTER THESE FIXES:
-  persistence baseline:  MAE ≈ 0.40–0.55°C   R² ≈ 0.96
-  ridge:                 MAE ≈ 0.30–0.55°C   R² ≈ 0.96–0.98
-  gradient_boosting:     MAE ≈ 0.20–0.40°C   R² ≈ 0.97–0.99  (should win)
-  random_forest:         MAE ≈ 0.22–0.42°C   R² ≈ 0.97–0.99
-
-  R² must never pin at 1.000. Fold MAE should be stable or improve
-  slightly — never show a step-change from 0.095 → 0.020.
-
-EXPECTED SHAP TOP FEATURES:
-  #1  temp_c_lag_1h        (dominant — autocorrelation is the strongest signal)
-  #2  temp_c_lag_2h
-  #3  temp_c_roll_mean_3h
-  #4  dew_point_c          (modest — atmospheric moisture, not temp proxy)
-  #5  month_sin / cos      (seasonal pattern)
-  ✗   temp_c_next_1h       (must be completely absent)
-  ✗   output_temp          (must be completely absent)
-"""
-
 import numpy as np
 import pandas as pd
 import joblib
@@ -162,26 +113,7 @@ def naive_baseline(
     y_train: pd.Series,
     y_test: pd.Series,
 ) -> dict[str, float]:
-    """
-    Persistence model: predict T+1 = T (next value = current value).
-
-    WHY THIS IS THE CORRECT NAIVE BASELINE FOR TEMPERATURE:
-      The old implementation used the last training value flat across
-      the entire test period. If the last training row was 12°C in
-      late October, every November and December prediction was 12°C.
-      That is not forecasting — it is a nonsense constant guess, and
-      it produced MAE=5°C with R²=−0.33, which made all ML models
-      look impossibly good by comparison.
-
-      The persistence model predicts "next hour = this hour". This is
-      what a human would do with no model at all. For temperature, it
-      is surprisingly hard to beat because autocorrelation at lag-1h
-      is approximately 0.99.
-
-    EXPECTED RESULT:
-      MAE ≈ 0.40–0.55°C, R² ≈ 0.96
-      This is the real floor your ML model must genuinely beat.
-    """
+   
     # Each prediction = previous test value
     # First test row uses last training value (no test history yet)
     last_train_val = float(y_train.iloc[-1])
@@ -231,6 +163,24 @@ def _prepare_X_y(
 
     feature_cols = [c for c in df.columns if c != target_col]
     return df[feature_cols], df[target_col]
+
+def _prepare_X_y_multi(
+    df: pd.DataFrame,
+    target_prefix: str = "temp_c_next_",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split the feature matrix into X (features) and y (MULTIPLE targets).
+    y is now a DataFrame, not a Series.
+    """
+    # Find all columns that start with the target prefix
+    target_cols = [c for c in df.columns if c.startswith(target_prefix)]
+    
+    if not target_cols:
+        raise ValueError(f"No target columns found starting with '{target_prefix}'")
+        
+    feature_cols = [c for c in df.columns if c not in target_cols]
+    
+    return df[feature_cols], df[target_cols]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -369,90 +319,61 @@ def compare_models(
 def train_final_model(
     df: pd.DataFrame,
     model_name: str = "random_forest",
-    target_col: str = "temp_c_next_1h",   # ← FIXED: was "temp_c"
-) -> tuple[Pipeline, list[str]]:
+) -> tuple[Pipeline, list[str], list[str]]:
     """
-    Train the chosen model on ALL available data for deployment.
-
-    WHY RETRAIN ON ALL DATA AFTER CV:
-      During CV we held back data to measure performance honestly.
-      Once we have selected the best model architecture, there is no
-      reason to keep holding data back — more training data always
-      improves generalisation. The CV metrics remain our honest
-      performance estimate.
-
-    RETURNS:
-      (fitted_pipeline, feature_column_names)
-
-      Both are required for deployment:
-        - pipeline:      call .predict() on new observations
-        - feature_cols:  validate and order API request inputs
-                         A model without its feature list is like a
-                         recipe without ingredient names.
+    Train the chosen model on ALL available data.
+    Now returns: (pipeline, feature_cols, target_cols)
     """
-    feature_cols = [c for c in df.columns if c != target_col]
-    X = df[feature_cols].values
-    y = df[target_col].values
-
+    X_df, y_df = _prepare_X_y_multi(df)
+    
+    feature_cols = X_df.columns.tolist()
+    target_cols = y_df.columns.tolist() # Keep track of the output order!
+    
+    X = X_df.values
+    y = y_df.values
+    
     model = CANDIDATE_MODELS[model_name]
     pipe  = Pipeline([
         ("scaler", StandardScaler()),
         ("model",  model),
     ])
-
-    logger.info(
-        f"Training final {model_name} on {len(X):,} samples, "
-        f"{len(feature_cols)} features, target='{target_col}'..."
-    )
+    
+    logger.info(f"Training final {model_name} on {len(X):,} samples for {len(target_cols)} horizons...")
     pipe.fit(X, y)
-    logger.info("Final model training complete")
-
-    return pipe, feature_cols
+    logger.info("Final multi-output model training complete")
+    
+    return pipe, feature_cols, target_cols
 
 
 def save_model(
     pipeline: Pipeline,
     feature_cols: list[str],
+    target_cols: list[str],          # <-- Multi-output parameter
     cv_metrics: dict | None = None,
 ) -> None:
     """
-    Save model artifact: pipeline + feature list + metadata.
-
-    WHAT GETS SAVED AND WHY:
-      pipeline      — fitted model, ready to call .predict()
-      feature_cols  — ordered list of feature names the model expects.
-                      The API validates and orders inputs against this.
-      model_version — from config, ties artifact to a code version.
-      cv_metrics    — honest performance estimate from CV. Saved with
-                      the model so /health endpoint can report it without
-                      recomputing at every startup.
-
-    WHY joblib NOT pickle:
-      joblib is optimised for large numpy arrays (what sklearn models
-      contain internally). Faster to save and load than pickle for
-      anything with significant numerical data.
+    Save model artifact: pipeline + feature list + target list + metadata.
     """
     artifact = {
         "pipeline":      pipeline,
         "feature_cols":  feature_cols,
+        "target_cols":   target_cols,    # <-- FIXED: Save the list of 5 targets!
         "model_version": cfg.model_version,
         "cv_metrics":    cv_metrics or {},
-        "target_col":    "temp_c_next_1h",
     }
 
     cfg.model_path.parent.mkdir(parents=True, exist_ok=True)
+    import joblib  # ensuring joblib is available
     joblib.dump(artifact, cfg.model_path)
+    
     logger.info(f"Artifact saved → {cfg.model_path}")
     logger.info(f"  version      : {cfg.model_version}")
     logger.info(f"  features     : {len(feature_cols)}")
-    logger.info(f"  target       : temp_c_next_1h")
+    logger.info(f"  targets      : {len(target_cols)} horizons") # <-- FIXED: dynamic logging
 
 
 def load_model() -> dict[str, Any]:
-    """
-    Load the saved artifact. Raises a clear, actionable error if missing.
-    Called once at API startup — not on every request.
-    """
+    
     if not cfg.model_path.exists():
         raise FileNotFoundError(
             f"No model artifact found at: {cfg.model_path}\n"
@@ -463,26 +384,22 @@ def load_model() -> dict[str, Any]:
 
     artifact = joblib.load(cfg.model_path)
 
-    # Validate artifact structure — catches stale artifacts from before fixes
-    required_keys = {"pipeline", "feature_cols", "model_version", "target_col"}
+    # FIXED: Validate against the new Multi-Output structure ('target_cols' instead of 'target_col')
+    required_keys = {"pipeline", "feature_cols", "model_version", "target_cols"}
     missing = required_keys - set(artifact.keys())
     if missing:
         raise ValueError(
             f"Artifact is missing keys: {missing}\n"
-            f"Retrain the model — the artifact predates the leakage fixes."
+            f"Retrain the model — the artifact predates the Multi-Output upgrade."
         )
 
-    if artifact.get("target_col") != "temp_c_next_1h":
-        raise ValueError(
-            f"Artifact target is '{artifact.get('target_col')}', expected 'temp_c_next_1h'.\n"
-            f"This artifact was trained before Fix 2 was applied. Retrain."
-        )
-
+    # Log the successful load
     logger.info(
-        f"Model loaded: version={artifact['model_version']}  "
-        f"features={len(artifact['feature_cols'])}  "
-        f"target={artifact['target_col']}"
+        f"Model loaded: version={artifact.get('model_version', 'unknown')}  "
+        f"features={len(artifact.get('feature_cols', []))}  "
+        f"targets={len(artifact.get('target_cols', []))}"
     )
+
     return artifact
 
 

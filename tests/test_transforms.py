@@ -17,18 +17,20 @@ from src.features.transforms import (
 )
 
 
+# tests/test_transforms.py
+
 @pytest.fixture
 def hourly_df():
-    """48 rows of hourly data — enough to satisfy lag_48h without all NaN."""
-    idx = pd.date_range("2020-06-01", periods=96, freq="1h")
+    """150 rows of hourly data — enough to satisfy lag_48h AND next_48h shifts."""
+    idx = pd.date_range("2020-06-01", periods=150, freq="1h")
     np.random.seed(42)
     return pd.DataFrame({
-        "temp_c":        np.random.uniform(10, 25, 96),
-        "pressure_mbar": np.random.uniform(990, 1015, 96),
-        "dew_point_c":   np.random.uniform(5, 15, 96),
-        "wind_speed":    np.random.uniform(0, 10, 96),
-        "wind_direction": np.random.uniform(0, 360, 96),
-        "humidity_pct":  np.random.uniform(40, 90, 96),
+        "temp_c":        np.random.uniform(10, 25, 150),
+        "pressure_mbar": np.random.uniform(990, 1015, 150),
+        "dew_point_c":   np.random.uniform(5, 15, 150),
+        "wind_speed":    np.random.uniform(0, 10, 150),
+        "wind_direction": np.random.uniform(0, 360, 150),
+        "humidity_pct":  np.random.uniform(40, 90, 150),
     }, index=idx)
 
 

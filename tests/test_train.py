@@ -36,9 +36,13 @@ def small_feature_df():
     t   = np.linspace(0, 4 * np.pi, 96)
 
     return pd.DataFrame({
-        "temp_c":        10 + 5 * np.sin(t) + np.random.normal(0, 0.3, 96),
-        "temp_c_lag_1h": 10 + 5 * np.sin(t - 1) + np.random.normal(0, 0.3, 96),
-        "temp_c_lag_24h":10 + 5 * np.sin(t - 24) + np.random.normal(0, 0.3, 96),
+        # Current temp (Feature)
+        "temp_c":         10 + 5 * np.sin(t) + np.random.normal(0, 0.3, 96),
+        # Target (T+1) - Notice the (t + 1) math
+        "temp_c_next_1h": 10 + 5 * np.sin(t + 1) + np.random.normal(0, 0.3, 96),
+        # Lags and other features
+        "temp_c_lag_1h":  10 + 5 * np.sin(t - 1) + np.random.normal(0, 0.3, 96),
+        "temp_c_lag_24h": 10 + 5 * np.sin(t - 24) + np.random.normal(0, 0.3, 96),
         "hour_sin":       np.sin(2 * np.pi * np.arange(96) % 24 / 24),
         "hour_cos":       np.cos(2 * np.pi * np.arange(96) % 24 / 24),
         "pressure_mbar":  1010 + np.random.normal(0, 2, 96),
@@ -131,22 +135,24 @@ def test_cv_no_negative_mae(small_feature_df):
 
 def test_save_and_load_roundtrip(small_feature_df, tmp_path, monkeypatch):
     """
-    Saved artifact must load with identical pipeline and feature list.
-    Uses monkeypatch to redirect cfg.model_path to a temp directory
-    so tests never touch the real artifacts/ folder.
+    Saved artifact must load with identical pipeline, feature list, and target list.
     """
     from src import config as cfg_module
 
     temp_model_path = tmp_path / "model.pkl"
     monkeypatch.setattr(cfg_module.cfg, "model_path", temp_model_path)
 
-    pipeline, feature_cols = train_final_model(
+    # FIXED: Unpack 3 variables now (pipeline, features, targets)
+    pipeline, feature_cols, target_cols = train_final_model(
         small_feature_df, model_name="ridge"
     )
-    save_model(pipeline, feature_cols, cv_metrics={"mae": 0.5})
+    
+    # FIXED: Pass target_cols to save_model
+    save_model(pipeline, feature_cols, target_cols, cv_metrics={"mae": 0.5})
 
     loaded = load_model()
     assert loaded["feature_cols"] == feature_cols
+    assert loaded["target_cols"] == target_cols  # Verify targets loaded
     assert "pipeline"      in loaded
     assert "model_version" in loaded
     assert "cv_metrics"    in loaded

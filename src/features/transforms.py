@@ -66,6 +66,9 @@ PHYSICS_DERIVED = [
     "h2o_concentration",    # = specific_humidity × air_density     compound of above
     "par_max",
     "par",
+    "solar_radiation",
+    "raining_s",
+    "rain_mm",
 ]
 
 
@@ -235,38 +238,20 @@ def add_physics_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def create_forecast_target(
+def create_multi_forecast_targets(
     df: pd.DataFrame,
-    horizon: int = 1,
+    horizons: list[int] = [1, 6, 12, 24, 48],
     source_col: str = "temp_c",
-    target_name: str = "temp_c_next_1h",
 ) -> pd.DataFrame:
     """
-    Shift the target column forward by `horizon` hours, creating an
-    explicit future-looking prediction target.
-
-    WHY this matters:
-      Without this shift, the model predicts temp_c AT time T using
-      features AT time T — including temp_c itself, which makes the
-      task trivially easy (the answer is in the features).
-
-      After this shift, each row's features are from time T and the
-      target is temp_c at T+horizon. The model must genuinely
-      extrapolate from present observations to a future value.
-
-    The last `horizon` rows will have NaN as target (no future
-    observation available) and are removed by the final dropna().
-
-    Args:
-      horizon:     how many hours ahead to forecast (default 1)
-      source_col:  column to shift forward
-      target_name: name of the new target column
+    Shift the target column forward by multiple horizons simultaneously.
+    This prepares the dataset for Multi-Output Regression.
     """
-    df[target_name] = df[source_col].shift(-horizon)
-    logger.info(
-        f"Created forecast target '{target_name}' "
-        f"(horizon={horizon}h, last {horizon} rows will be NaN)"
-    )
+    for h in horizons:
+        target_name = f"{source_col}_next_{h}h"
+        df[target_name] = df[source_col].shift(-h)
+    
+    logger.info(f"Created multi-forecast targets for horizons: {horizons}")
     return df
 
 
@@ -332,62 +317,28 @@ def validate_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_feature_matrix(
     df: pd.DataFrame,
-    forecast_horizon: int = 1,
+    forecast_horizons: list[int] = [1, 6, 12, 24, 48],
 ) -> pd.DataFrame:
     """
-    Full feature engineering pipeline — single entry point for both
-    notebooks and the automation script.
-
-    Call order is deliberate and load-bearing:
-      1. add_time_features        — always available, no column deps
-      2. add_wind_components      — needs wind_speed + wind_direction
-      3. add_physics_features     — needs pressure_mbar
-      4. add_lag_features         — needs temp_c to be present
-      5. add_rolling_features     — needs temp_c, built after lags
-      6. create_forecast_target   — MUST come after lags/rolling so
-                                    the future target doesn't pollute
-                                    any rolling computation
-      7. drop_redundant_columns   — MUST be after all features are
-                                    built (some derived cols created
-                                    above are then dropped here)
-      8. validate_features        — final audit, never modifies
-      9. dropna()                 — LAST: removes rows where any
-                                    feature is NaN (from shifts/rolls
-                                    at the start of the series, and
-                                    the last `horizon` rows where the
-                                    future target doesn't exist yet)
-
-    Args:
-      df:               Cleaned, hourly-resampled DataFrame from
-                        cleaner.clean(). Must include temp_c column.
-      forecast_horizon: hours ahead to forecast (default 1).
-
-    Returns:
-      Feature matrix with all engineered columns + forecast target.
-      No NaN values. Ready to split into X and y for training.
+    Full feature engineering pipeline, upgraded for Multi-Output.
     """
-    logger.info("=" * 50)
-    logger.info(f"Building feature matrix (horizon={forecast_horizon}h)")
-    logger.info(f"Input:  {df.shape[0]:,} rows × {df.shape[1]} columns")
-
+    logger.info("Building multi-output feature matrix...")
+    rows_in = len(df)
+    
     df = add_time_features(df)
     df = add_wind_components(df)
     df = add_physics_features(df)
     df = add_lag_features(df)
     df = add_rolling_features(df)
-    df = create_forecast_target(df, horizon=forecast_horizon)
+    
+    # NEW: Create multiple targets
+    df = create_multi_forecast_targets(df, horizons=forecast_horizons)
+    
     df = drop_redundant_columns(df)
-    df = validate_features(df)
-
-    rows_before = len(df)
+    
     df = df.dropna()
-    rows_dropped = rows_before - len(df)
-
     logger.info(
-        f"Output: {len(df):,} rows × {df.shape[1]} columns "
-        f"({rows_dropped} rows dropped for NaN)"
+        f"Feature matrix: {len(df):,} rows × {df.shape[1]} columns "
+        f"({rows_in - len(df)} rows dropped)"
     )
-    logger.info("Feature matrix complete")
-    logger.info("=" * 50)
-
     return df
