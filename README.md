@@ -86,7 +86,9 @@ The model does not rely only on current inputs. It automatically derives:
 
 <img width="939" height="378" alt="image" src="https://github.com/user-attachments/assets/175381dd-769a-49ca-b92b-7f8a61712c61" />
 
+
 <img width="463" height="176" alt="image" src="https://github.com/user-attachments/assets/c63c35a9-37d1-40ea-87b7-36f4be224062" />
+
 
 <img width="402" height="340" alt="image" src="https://github.com/user-attachments/assets/b84a9f62-8d1a-48f6-adee-e537ceab7864" />
 
